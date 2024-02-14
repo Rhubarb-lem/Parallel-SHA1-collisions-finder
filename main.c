@@ -1,79 +1,89 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <openssl/sha.h>
-#include "mpi.h"
+#include <mpi.h>
 
-void computeSHA1(const char *input, unsigned char *output) {
-    SHA1((const unsigned char *)input, strlen(input), output);
-}
+#define STR_LENGTH 5
 
-void generateAndCompare(int length, const char *searchString, char startChar, char endChar) {
-    char buffer[length + 1];
-    buffer[length] = '\0';
-    unsigned char targetHash[SHA_DIGEST_LENGTH];
-    computeSHA1(searchString, targetHash);
+void gen(int lb, int ub, const char *searchString,  int *localCount)
+{
+    char buffer[STR_LENGTH + 1];
+    buffer[STR_LENGTH] = '\0';
 
-    
-    void generate(int index, char prevChar) {
-        for (char c = prevChar + 1; c <= endChar; c++) {
-            buffer[index] = c;
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    int count = 0;
 
-            if (index == length - 1) {
-                unsigned char hash[SHA_DIGEST_LENGTH];
-                computeSHA1(buffer, hash);
-                if (memcmp(hash, targetHash, SHA_DIGEST_LENGTH) == 0) {
-                    printf("Match found: %s\n", buffer);
-                    
-                    MPI_Send(buffer, length + 1, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
+    void generate(int index, char prevChar)
+    {
+        for (char j = prevChar + 1; j <= 122; j++)
+        {
+            buffer[index] = (char)j;
+            if (index == STR_LENGTH - 1)
+            {
+                SHA1((const unsigned char *)buffer, STR_LENGTH, hash);
+                char hex_hash[2 * SHA_DIGEST_LENGTH + 1];
+                for (int i = 0; i < SHA_DIGEST_LENGTH; i++)
+                {
+                    sprintf(hex_hash + (2 * i), "%02x", hash[i]);
                 }
-            } else {
-                generate(index + 1, c);  
+
+                if (strcmp(hex_hash, searchString) == 0)
+                {
+                    printf("Find collision!:%s\n", buffer);
+                    count++;
+                }
+            }
+            else
+            {
+                generate(index + 1, j);
             }
         }
     }
 
-    generate(0, startChar - 1);  
+    for (char c = lb; c <= ub; c++)
+    {
+        buffer[0] = (char)c;
+        generate(1, 47);
+    }
+    *localCount = count;
 }
 
-int main(int argc, char *argv[]) {
-    int length = 4;  
-    const char *searchString = "test"; 
-
+int main(int argc, char *argv[])
+{
+    int rank, num_procs;
     MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &num_procs);
+    double t = MPI_Wtime();
 
-    int world_size, world_rank;
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-    MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+    char searchHash[2 * SHA_DIGEST_LENGTH + 1];
 
-    int chunkSize = ('z' - 'a' + 1) / world_size;
-    char startChar = 'a' + world_rank * chunkSize;
-    char endChar = startChar + chunkSize - 1;
-    if (world_rank == world_size - 1) {
-        endChar = 'z';
+    char inputString[] = "abcde";
+    unsigned char hash[SHA_DIGEST_LENGTH];
+    SHA1((const unsigned char *)inputString, strlen(inputString), hash);
+    for (int i = 0; i < SHA_DIGEST_LENGTH; i++)
+    {
+        sprintf(searchHash + (2 * i), "%02x", hash[i]);
     }
 
-    if (world_rank == 0) {
-        char matchedStrings[100][length + 1];  
-        int matchedCount = 0;
-
-        for (int i = 1; i < world_size; i++) {
-            char buffer[length + 1];
-            for (int j = 0; j < 100; j++) {
-                MPI_Recv(buffer, length + 1, MPI_CHAR, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-                strcpy(matchedStrings[matchedCount], buffer);
-                matchedCount++;
-            }
-        }
-
-        printf("Match found:\n");
-        for (int i = 0; i < matchedCount; i++) {
-            printf("%s\n", matchedStrings[i]);
-        }
-    } else {
-        generateAndCompare(length, searchString, startChar, endChar);
+    int chunk = (122 - 48) / num_procs;
+    int lb = 48 + rank * chunk;
+    int ub = lb + chunk;
+    if (rank < (122 - 48) % num_procs)
+    {
+        lb++;
     }
+
+  
+    int localCount;
+    printf("P = %d\n", num_procs);
+    gen(lb, ub, searchHash, &localCount);
+    printf("(%d)\n", localCount);
+
+    t = MPI_Wtime() - t;
+    printf(":%f:\n", t);
 
     MPI_Finalize();
-
     return 0;
 }
